@@ -20,6 +20,12 @@ def parse_packet(packet):
     payload = packet[10:]
     return seq_num, ack_num, flags, payload
 
+# Function to print packet details
+def print_packet_details(seq_num, ack_num, flags, payload, sender=True):
+    role = "Sender" if sender else "Receiver"
+    print(f"{role} - Seq: {seq_num}, Ack: {ack_num}, Flags: {flags}, Payload: {payload.decode()}")
+
+
 # Sender class
 class ReliableSender:
     def __init__(self, dest_ip, dest_port):
@@ -90,10 +96,11 @@ class ReliableSender:
         while self.connected:
             try:
                 data, _ = self.sock.recvfrom(1024)
-                _, ack_num, flags, _ = parse_packet(data)
+                seq_num, ack_num, flags, _ = parse_packet(data)
                 if flags & ACK:
                     with self.lock:
                         self.base = ack_num + 1
+                        print_packet_details(seq_num, ack_num, flags, b'', sender=False)
                         if self.base == self.seq_num:
                             self.ack_received.set()
                         else:
@@ -114,6 +121,7 @@ class ReliableReceiver:
         while True:
             data, addr = self.sock.recvfrom(1024)
             seq_num, ack_num, flags, payload = parse_packet(data)
+            print_packet_details(seq_num, ack_num, flags, payload, sender=False)
 
             if flags & SYN:
                 self.connected = True
@@ -132,6 +140,7 @@ class ReliableReceiver:
     def _send_ack(self, seq_num, addr, flag):
         ack_packet = create_packet(0, seq_num, flag | ACK, b'')
         self.sock.sendto(ack_packet, addr)
+        print_packet_details(0, seq_num, flag | ACK, b'')
 
 # Main function to run both sender and receiver
 def main():
