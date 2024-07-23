@@ -20,22 +20,23 @@ def parse_packet(packet):
     payload = packet[10:]
     return seq_num, ack_num, flags, payload
 
-# Function to print packet details
+# Function to print packet details with individual flags
 def print_packet_details(seq_num, ack_num, flags, payload, sender=True):
     role = "Sender" if sender else "Receiver"
-    print(f"{role} - Seq: {seq_num}, Ack: {ack_num}, Flags: {flags}, Payload: {payload.decode()}")
-
+    flags_str = f"SYN: {bool(flags & SYN)}, ACK: {bool(flags & ACK)}, FIN: {bool(flags & FIN)}, DATA: {bool(flags & DATA)}"
+    print(f"{role} - Seq: {seq_num}, Ack: {ack_num}, Flags: {flags_str}, Payload: {payload.decode()}")
 
 # Sender class
 class ReliableSender:
-    def __init__(self, dest_ip, dest_port):
+    def __init__(self, dest_ip, dest_port, window_size=5, payload_size=1000):
         self.dest_ip = dest_ip
         self.dest_port = dest_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(1)
         self.seq_num = 0
         self.ack_num = 0
-        self.window_size = 5
+        self.window_size = window_size
+        self.payload_size = payload_size
         self.base = 0
         self.lock = threading.Lock()
         self.ack_received = threading.Event()
@@ -53,14 +54,15 @@ class ReliableSender:
     def send(self, data):
         if not self.connected:
             raise Exception("Connection not established")
-        segments = [data[i:i+1000] for i in range(0, len(data), 1000)]
+        segments = [data[i:i + self.payload_size] for i in range(0, len(data), self.payload_size)]
         threading.Thread(target=self._receive_ack).start()
 
         for segment in segments:
             with self.lock:
                 if self.seq_num < self.base + self.window_size:
                     self._send_packet(DATA, segment)
-                    self.seq_num += 1
+                    self.seq_num += len(segment)
+
 
             if not self.ack_received.wait(timeout=2):
                 print(f"Sender: Timeout, resending from {self.base}")
@@ -79,6 +81,7 @@ class ReliableSender:
     def _send_packet(self, flags, payload=b''):
         packet = create_packet(self.seq_num, self.ack_num, flags, payload)
         self.sock.sendto(packet, (self.dest_ip, self.dest_port))
+        print_packet_details(self.seq_num, self.ack_num, flags, payload)
 
     def _wait_for_ack(self, flag):
         while True:
@@ -87,6 +90,7 @@ class ReliableSender:
                 seq_num, ack_num, flags, _ = parse_packet(data)
                 if flags & flag:
                     self.ack_num = ack_num
+                    print_packet_details(seq_num, ack_num, flags, b'', sender=False)
                     return True
             except socket.timeout:
                 continue
@@ -99,7 +103,7 @@ class ReliableSender:
                 seq_num, ack_num, flags, _ = parse_packet(data)
                 if flags & ACK:
                     with self.lock:
-                        self.base = ack_num + 1
+                        self.base = ack_num
                         print_packet_details(seq_num, ack_num, flags, b'', sender=False)
                         if self.base == self.seq_num:
                             self.ack_received.set()
@@ -115,7 +119,14 @@ class ReliableReceiver:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', local_port))
         self.expected_seq_num = 0
+        self.received_data = {}  # Buffer to store out-of-order packets
         self.connected = False
+
+    def _send_ack(self, seq_num, addr, flag, payload_len=0, double_ack=False):
+        ack_num = seq_num + payload_len if not double_ack else self.expected_seq_num
+        ack_packet = create_packet(0, ack_num, flag | ACK, b'')
+        self.sock.sendto(ack_packet, addr)
+        print_packet_details(0, ack_num, flag | ACK, b'')
 
     def listen(self):
         while True:
@@ -125,22 +136,27 @@ class ReliableReceiver:
 
             if flags & SYN:
                 self.connected = True
-                self._send_ack(seq_num, addr, SYN)
+                self._send_ack(seq_num, addr, SYN, payload_len=0)
                 print("Receiver: Connection established")
             elif flags & FIN:
-                self._send_ack(seq_num, addr, FIN)
+                self._send_ack(seq_num, addr, FIN, payload_len=0)
                 self.connected = False
                 print("Receiver: Connection closed")
                 break
-            elif flags & DATA and seq_num == self.expected_seq_num:
-                print(f"Receiver: Received: {payload.decode()}")
-                self.expected_seq_num += 1
-                self._send_ack(seq_num, addr, DATA)
-
-    def _send_ack(self, seq_num, addr, flag):
-        ack_packet = create_packet(0, seq_num, flag | ACK, b'')
-        self.sock.sendto(ack_packet, addr)
-        print_packet_details(0, seq_num, flag | ACK, b'')
+            elif flags & DATA:
+                if seq_num == self.expected_seq_num:
+                    print(f"Receiver: Received: {payload.decode()}")
+                    self.expected_seq_num += len(payload)
+                    self._send_ack(seq_num, addr, DATA, payload_len=len(payload))
+                    # Deliver buffered packets in order
+                    while self.expected_seq_num in self.received_data:
+                        next_payload = self.received_data.pop(self.expected_seq_num)
+                        print(f"Receiver: Delivered buffered data: {next_payload.decode()}")
+                        self.expected_seq_num += len(next_payload)
+                else:
+                    print(f"Receiver: Out-of-order packet received: Seq {seq_num}, expected {self.expected_seq_num}")
+                    self.received_data[seq_num] = payload
+                    self._send_ack(seq_num, addr, DATA, payload_len=len(payload), double_ack=True)
 
 # Main function to run both sender and receiver
 def main():
