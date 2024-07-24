@@ -8,6 +8,7 @@ import random
 SYN = 1
 ACK = 2
 FIN = 4
+PSH = 8
 
 # Packet structure using struct for better control over byte data
 def create_packet(seq_num, ack_num, flags, payload):
@@ -44,7 +45,7 @@ class ReliableSender:
 
     def connect(self):
         self._send_packet(SYN)
-        response = self._wait_for_ack(SYN)
+        response = self._wait_for_ack(SYN | ACK)
         if response:
             self.connected = True
             print("Sender: Connection established")
@@ -60,7 +61,7 @@ class ReliableSender:
         for segment in segments:
             with self.lock:
                 if self.seq_num < self.base + self.window_size:
-                    self._send_packet(ACK, segment)
+                    self._send_packet(PSH | ACK, segment)
                     self.seq_num += len(segment)
 
             if not self.ack_received.wait(timeout=2):
@@ -121,11 +122,11 @@ class ReliableReceiver:
         self.received_data = {}  # Buffer to store out-of-order packets
         self.connected = False
 
-    def _send_ack(self, seq_num, addr, flag, payload_len=0, double_ack=False):
-        ack_num = seq_num + payload_len if not double_ack else self.expected_seq_num
-        ack_packet = create_packet(0, ack_num, flag | ACK, b'')
+    def _send_ack(self, seq_num, addr, flag, payload_len=0):
+        ack_num = seq_num + payload_len
+        ack_packet = create_packet(self.expected_seq_num, ack_num, flag | ACK, b'')
         self.sock.sendto(ack_packet, addr)
-        print_packet_details(0, ack_num, flag | ACK, b'')
+        print_packet_details(self.expected_seq_num, ack_num, flag | ACK, b'')
 
     def listen(self):
         while True:
@@ -135,18 +136,18 @@ class ReliableReceiver:
 
             if flags & SYN:
                 self.connected = True
-                self._send_ack(seq_num, addr, SYN, payload_len=0)
+                self._send_ack(seq_num, addr, SYN)
                 print("Receiver: Connection established")
             elif flags & FIN:
-                self._send_ack(seq_num, addr, FIN, payload_len=0)
+                self._send_ack(seq_num, addr, FIN)
                 self.connected = False
                 print("Receiver: Connection closed")
                 break
-            elif flags & ACK:
+            elif flags & PSH:
                 if seq_num == self.expected_seq_num:
                     print(f"Receiver: Received: {payload.decode()}")
                     self.expected_seq_num += len(payload)
-                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload))
+                    self._send_ack(seq_num, addr, PSH, payload_len=len(payload))
                     # Deliver buffered packets in order
                     while self.expected_seq_num in self.received_data:
                         next_payload = self.received_data.pop(self.expected_seq_num)
@@ -155,7 +156,7 @@ class ReliableReceiver:
                 else:
                     print(f"Receiver: Out-of-order packet received: Seq {seq_num}, expected {self.expected_seq_num}")
                     self.received_data[seq_num] = payload
-                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload), double_ack=True)
+                    self._send_ack(seq_num, addr, PSH, payload_len=len(payload))
 
 # Main function to run both sender and receiver
 def main():
