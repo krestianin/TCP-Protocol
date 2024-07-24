@@ -2,12 +2,12 @@ import socket
 import threading
 import struct
 import time
+import random
 
 # Packet flags
 SYN = 1
 ACK = 2
 FIN = 4
-DATA = 8
 
 # Packet structure using struct for better control over byte data
 def create_packet(seq_num, ack_num, flags, payload):
@@ -23,7 +23,7 @@ def parse_packet(packet):
 # Function to print packet details with individual flags
 def print_packet_details(seq_num, ack_num, flags, payload, sender=True):
     role = "Sender" if sender else "Receiver"
-    flags_str = f"SYN: {bool(flags & SYN)}, ACK: {bool(flags & ACK)}, FIN: {bool(flags & FIN)}, DATA: {bool(flags & DATA)}"
+    flags_str = f"SYN: {int(bool(flags & SYN))}, ACK: {int(bool(flags & ACK))}, FIN: {int(bool(flags & FIN))}"
     print(f"{role} - Seq: {seq_num}, Ack: {ack_num}, Flags: {flags_str}, Payload: {payload.decode()}")
 
 # Sender class
@@ -33,11 +33,11 @@ class ReliableSender:
         self.dest_port = dest_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(1)
-        self.seq_num = 0
+        self.seq_num = random.randint(0, 10000)
         self.ack_num = 0
         self.window_size = window_size
         self.payload_size = payload_size
-        self.base = 0
+        self.base = self.seq_num
         self.lock = threading.Lock()
         self.ack_received = threading.Event()
         self.connected = False
@@ -60,9 +60,8 @@ class ReliableSender:
         for segment in segments:
             with self.lock:
                 if self.seq_num < self.base + self.window_size:
-                    self._send_packet(DATA, segment)
+                    self._send_packet(ACK, segment)
                     self.seq_num += len(segment)
-
 
             if not self.ack_received.wait(timeout=2):
                 print(f"Sender: Timeout, resending from {self.base}")
@@ -88,7 +87,7 @@ class ReliableSender:
             try:
                 data, _ = self.sock.recvfrom(1024)
                 seq_num, ack_num, flags, _ = parse_packet(data)
-                if flags & flag:
+                if flags & ACK and (flags & flag):
                     self.ack_num = ack_num
                     print_packet_details(seq_num, ack_num, flags, b'', sender=False)
                     return True
@@ -118,7 +117,7 @@ class ReliableReceiver:
         self.local_port = local_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', local_port))
-        self.expected_seq_num = 0
+        self.expected_seq_num = random.randint(0, 10000)
         self.received_data = {}  # Buffer to store out-of-order packets
         self.connected = False
 
@@ -143,11 +142,11 @@ class ReliableReceiver:
                 self.connected = False
                 print("Receiver: Connection closed")
                 break
-            elif flags & DATA:
+            elif flags & ACK:
                 if seq_num == self.expected_seq_num:
                     print(f"Receiver: Received: {payload.decode()}")
                     self.expected_seq_num += len(payload)
-                    self._send_ack(seq_num, addr, DATA, payload_len=len(payload))
+                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload))
                     # Deliver buffered packets in order
                     while self.expected_seq_num in self.received_data:
                         next_payload = self.received_data.pop(self.expected_seq_num)
@@ -156,7 +155,7 @@ class ReliableReceiver:
                 else:
                     print(f"Receiver: Out-of-order packet received: Seq {seq_num}, expected {self.expected_seq_num}")
                     self.received_data[seq_num] = payload
-                    self._send_ack(seq_num, addr, DATA, payload_len=len(payload), double_ack=True)
+                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload), double_ack=True)
 
 # Main function to run both sender and receiver
 def main():
