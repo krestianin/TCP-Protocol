@@ -45,8 +45,11 @@ class ReliableSender:
 
     def connect(self):
         self._send_packet(SYN)
-        response = self._wait_for_ack(SYN | ACK)
+        response, peer_seq_num = self._wait_for_ack(SYN | ACK)
         if response:
+            self.ack_num = peer_seq_num + 1  # Update acknowledgment number to receiver's sequence number + 1
+            self.seq_num += 1  # Increment sequence number after sending SYN
+            self._send_packet(ACK)  # Send ACK to complete three-way handshake
             self.connected = True
             print("Sender: Connection established")
         else:
@@ -71,8 +74,10 @@ class ReliableSender:
 
     def close(self):
         self._send_packet(FIN)
-        response = self._wait_for_ack(FIN)
+        response = self._wait_for_ack(FIN | ACK)
         if response:
+            self.seq_num += 1  # Increment sequence number after sending FIN
+            self._send_packet(ACK)
             self.connected = False
             print("Sender: Connection closed")
         else:
@@ -91,10 +96,10 @@ class ReliableSender:
                 if flags & ACK and (flags & flag):
                     self.ack_num = ack_num
                     print_packet_details(seq_num, ack_num, flags, b'', sender=False)
-                    return True
+                    return True, seq_num
             except socket.timeout:
                 continue
-            return False
+            return False, 0
 
     def _receive_ack(self):
         while self.connected:
@@ -126,20 +131,23 @@ class ReliableReceiver:
         ack_num = seq_num + payload_len
         ack_packet = create_packet(self.expected_seq_num, ack_num, flag | ACK, b'')
         self.sock.sendto(ack_packet, addr)
-        print_packet_details(self.expected_seq_num, ack_num, flag | ACK, b'')
+        print_packet_details(self.expected_seq_num, ack_num, flag | ACK, b'', sender=False)
 
     def listen(self):
         while True:
             data, addr = self.sock.recvfrom(1024)
             seq_num, ack_num, flags, payload = parse_packet(data)
-            print_packet_details(seq_num, ack_num, flags, payload, sender=False)
+            print_packet_details(seq_num, ack_num, flags, payload, sender=True)
 
             if flags & SYN:
                 self.connected = True
+                self.expected_seq_num = seq_num + 1
                 self._send_ack(seq_num, addr, SYN)
                 print("Receiver: Connection established")
             elif flags & FIN:
                 self._send_ack(seq_num, addr, FIN)
+                self.expected_seq_num += 1
+                self._send_ack(seq_num, addr, FIN)  # Send ACK for FIN
                 self.connected = False
                 print("Receiver: Connection closed")
                 break
@@ -157,6 +165,20 @@ class ReliableReceiver:
                     print(f"Receiver: Out-of-order packet received: Seq {seq_num}, expected {self.expected_seq_num}")
                     self.received_data[seq_num] = payload
                     self._send_ack(seq_num, addr, PSH, payload_len=len(payload))
+            else:
+                if seq_num == self.expected_seq_num:
+                    print(f"Receiver: Received: {payload.decode()}")
+                    self.expected_seq_num += len(payload)
+                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload))
+                    # Deliver buffered packets in order
+                    while self.expected_seq_num in self.received_data:
+                        next_payload = self.received_data.pop(self.expected_seq_num)
+                        print(f"Receiver: Delivered buffered data: {next_payload.decode()}")
+                        self.expected_seq_num += len(next_payload)
+                else:
+                    print(f"Receiver: Out-of-order packet received: Seq {seq_num}, expected {self.expected_seq_num}")
+                    self.received_data[seq_num] = payload
+                    self._send_ack(seq_num, addr, ACK, payload_len=len(payload))
 
 # Main function to run both sender and receiver
 def main():
