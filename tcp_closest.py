@@ -4,8 +4,12 @@ import time
 import struct
 
 # Constants
-MSS = 4096  # Maximum Segment Size
+MSS = 5  # Maximum Segment Size
 TIMEOUT = 20  # Retransmission timeout in seconds
+WINDOW_SIZE = 3  # Example window size
+INITIAL_CWND = 1  # Initial congestion window size
+SSTHRESH = 8  # Slow start threshold
+
 
 # Packet format: SEQ_NUM (4 bytes) | ACK_NUM (4 bytes) | FLAGS (1 byte) | WINDOW (4 bytes) | DATA
 PACKET_FORMAT = '!II?I'
@@ -18,11 +22,15 @@ class ReliableUDP:
         self.sock.bind(self.local_address)
         self.send_base = 0
         self.next_seq_num = 0
-        self.lock = threading.Lock()
+        self.window_size = WINDOW_SIZE
+        self.lock = threading.Condition()
         self.timer = None
         self.unacked_packets = {}  # Store unacknowledged packets for retransmission
+        self.cwnd = INITIAL_CWND  # Congestion window size
+        self.ssthresh = SSTHRESH  # Slow start threshold
         self.expected_seq_num = 0  # Expected sequence number for receiver
         self.connected = False
+        self.flag = True
         # self.fin_sent = False  # To indicate if FIN has been sent
 
     def start_timer(self):
@@ -36,45 +44,85 @@ class ReliableUDP:
             self.timer.cancel()
             self.timer = None
 
+
     def timeout(self):
         with self.lock:
             print(f"Timeout, retransmitting from seq {self.send_base}")
+            self.ssthresh = max(self.cwnd // 2, 1)
+            self.cwnd = INITIAL_CWND
             self.start_timer()
-            for seq in range(self.send_base, self.next_seq_num, MSS):
+            for seq in sorted(self.unacked_packets.keys()):
                 packet = self.unacked_packets.get(seq)
                 if packet:
                     print(f"Client: Resending packet: seq_num={seq}")
                     self.sock.sendto(packet, self.remote_address)
 
+
+
+
     def send(self, data):
         data_chunks = [data[i:i+MSS] for i in range(0, len(data), MSS)]
         for chunk in data_chunks:
             packet = self.create_packet(chunk, seq_num=self.next_seq_num)
-            print(packet)
+            # print(packet)
             with self.lock:
-                print(f"Client: Sending packet: seq_num={self.next_seq_num}")
-                self.sock.sendto(packet, self.remote_address)
-                self.unacked_packets[self.next_seq_num] = packet
-                self.next_seq_num += len(chunk)  # Increment by the length of the chunk
-                if self.send_base == self.next_seq_num - len(chunk):
-                    self.start_timer()
+                while self.next_seq_num >= self.send_base + min(self.window_size, self.cwnd) * MSS:
+                    print(F"self.next_seq_num {self.next_seq_num}")
+                    print(f"self.send_base {self.send_base}")
+                    print(f"self.window_size {self.window_size}")
+                    self.lock.wait()
+                    time.sleep(5)
+
+                if self.next_seq_num < self.send_base + min(self.window_size, self.cwnd) * MSS:
+                    print(f"Client: Sending packet: seq_num={self.next_seq_num}")
+
+
+                    if chunk == b'four' and not self.flag:
+                        self.flag = True
+                    else:
+                        self.sock.sendto(packet, self.remote_address)
+
+
+                    self.unacked_packets[self.next_seq_num] = packet
+                    self.next_seq_num += len(chunk)  # Increment by the length of the chunk
+                    if self.send_base == self.next_seq_num - len(chunk):
+                        self.start_timer()
 
     def receive_ack(self):
+        duplicate_ack_count = 0
+        last_ack_num = -1
         while self.connected:
             try:
                 packet, _ = self.sock.recvfrom(2048)
                 ack_num, new_window_size = self.process_ack(packet)
                 with self.lock:
-                    if ack_num >= self.send_base:
+                    if ack_num > self.send_base:
+                        duplicate_ack_count = 0  # Reset duplicate ACK count if new ACK is received
                         print(f"Client: Received ACK: ack_num={ack_num}, window_size={new_window_size}")
-                        self.send_base = ack_num + 1
+                        while self.send_base < ack_num:
+                            self.unacked_packets.pop(self.send_base, None)
+                            self.send_base += 1
+                        self.update_cwnd()  # Update congestion window
                         if self.send_base == self.next_seq_num:
                             self.stop_timer()
-                            # if self.fin_sent:
-                            #     break
                         else:
                             self.start_timer()
-                        self.unacked_packets.pop(ack_num, None)
+                        last_ack_num = ack_num
+
+                        # print("Notifying threads")
+                        self.lock.notify_all()  # Notify the sender that window space is available
+                        
+                    elif ack_num == last_ack_num:
+                        duplicate_ack_count += 1
+                        if duplicate_ack_count >= 3:
+                            print(f"Client: Fast retransmit due to 3 duplicate ACKs for seq_num={self.send_base}")
+                            self.ssthresh = max(self.cwnd // 2, 1)
+                            self.cwnd = INITIAL_CWND
+                            if self.send_base in self.unacked_packets:
+                                self.sock.sendto(self.unacked_packets[self.send_base], self.remote_address)
+                            duplicate_ack_count = 0  # Reset duplicate ACK count after fast retransmit
+                    else:
+                        print(f"Client: Received duplicate ACK: ack_num={ack_num}")
             except ConnectionResetError:
                 print("Connection reset by peer")
                 break
@@ -82,13 +130,23 @@ class ReliableUDP:
                 print(f"Unexpected error: {e}")
                 break
 
+
+
+    def update_cwnd(self):
+        if self.cwnd < self.ssthresh:
+            # Slow start phase
+            self.cwnd += 1
+        else:
+            # Congestion avoidance phase
+            self.cwnd += 1 / self.cwnd
+
     def create_packet(self, data, seq_num=None, ack_num=None, ack_flag=False, fin_flag=False, window_size=None):
         if seq_num is None:
             seq_num = self.next_seq_num
         if ack_num is None:
             ack_num = 0
         if window_size is None:
-            window_size = 0  # Commented out congestion window size
+            window_size = self.window_size
         flags = ack_flag | (fin_flag << 1)
         header = struct.pack(PACKET_FORMAT, seq_num, ack_num, flags, window_size)
         return header + data
@@ -172,18 +230,17 @@ class ReliableUDP:
         while self.connected:
             try:
                 packet, addr = self.sock.recvfrom(2048)
-                print(packet)
+                # print(packet)
                 seq_num, data = self.process_packet(packet)
                 if seq_num == self.expected_seq_num:
                     print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
-                    ack_packet = self.create_packet(b'', ack_num=seq_num + len(data), ack_flag=True)
+                    ack_packet = self.create_packet(b'', ack_num=seq_num + len(data), ack_flag=True, window_size=self.window_size)
                     self.sock.sendto(ack_packet, addr)
                     print(f"Server: Sending ACK: ack_num={seq_num + len(data)}")
                     self.expected_seq_num += len(data)  # Increment expected_seq_num by the length of the data received
-                    print(f"Server: Expected_seq_num: expected_seq_num={self.expected_seq_num}")
                 else:
                     # Send ACK for the last correctly received packet
-                    ack_packet = self.create_packet(b'', ack_num=self.expected_seq_num, ack_flag=True)
+                    ack_packet = self.create_packet(b'', ack_num=self.expected_seq_num, ack_flag=True, window_size=self.window_size)
                     self.sock.sendto(ack_packet, addr)
                     print(f"Server: Sending duplicate ACK: ack_num={self.expected_seq_num}")
             except ConnectionResetError:
@@ -237,9 +294,9 @@ class ReliableUDP:
     #     self.sock.close()
 
 def sender_main():
-    local_port = 8000
-    remote_address = 'localhost'
-    remote_port = 8080
+    local_port = 8080
+    remote_address = '142.58.83.132'
+    remote_port = 8000
 
     reliable_sender = ReliableUDP(local_port, remote_address, remote_port)
     reliable_sender.connect()
@@ -249,22 +306,38 @@ def sender_main():
 
     # Send multiple packets of different sizes to test
     messages = [
-        b'one',
-        b'four',
+        b'oness',
+        b'fours',
         b'crash',
-        b'someone',
-        b'greatest'
+        b'someo',
+        b'great',
+        b'11111',
+        b'22222',
+        b'33333',
+        b'44444',
+        b'55555',
     ]
+
+    # messages1 = [
+    #     b'one1',
+    #     b'four1',
+    #     b'crash1',
+    #     b'someone1',
+    #     b'greatest1'
+    # ]
+
     for msg in messages:
         reliable_sender.send(msg)
-        time.sleep(3)  # Add a small delay between sends for clarity
+
+    # for msg in messages1:
+    #     reliable_sender.send(msg)
 
     # reliable_sender.close()
     receiver_thread.join()
 
 def receiver_main():
     local_port = 8080
-    remote_address = 'localhost'
+    remote_address = '142.58.83.132'
     remote_port = 8000
 
     reliable_receiver = ReliableUDP(local_port, remote_address, remote_port)
@@ -280,12 +353,12 @@ def receiver_main():
     # fin_thread.join()
 
 if __name__ == '__main__':
-    receiver_thread = threading.Thread(target=receiver_main)
+    # receiver_thread = threading.Thread(target=receiver_main)
     sender_thread = threading.Thread(target=sender_main)
     
-    receiver_thread.start()
-    time.sleep(3)  # Ensures the receiver is ready before the sender starts
+    # receiver_thread.start()
+    time.sleep(3)
     sender_thread.start()
 
-    receiver_thread.join()
+    # receiver_thread.join()
     sender_thread.join()
