@@ -5,10 +5,10 @@ import struct
 
 # Constants
 MSS = 5  # Maximum Segment Size
-TIMEOUT = 20  # Retransmission timeout in seconds
-WINDOW_SIZE = 3  # Example window size
+TIMEOUT = 1000  # Retransmission timeout in seconds
+WINDOW_SIZE = 27  # Example window size
 INITIAL_CWND = 1  # Initial congestion window size
-SSTHRESH = 8  # Slow start threshold
+SSTHRESH = 4  # Slow start threshold
 
 
 # Packet format: SEQ_NUM (4 bytes) | ACK_NUM (4 bytes) | FLAGS (1 byte) | WINDOW (4 bytes) | DATA
@@ -31,6 +31,7 @@ class ReliableUDP:
         self.expected_seq_num = 0  # Expected sequence number for receiver
         self.connected = False
         self.flag = True
+        self.counter = 0
         # self.fin_sent = False  # To indicate if FIN has been sent
 
     def start_timer(self):
@@ -67,26 +68,29 @@ class ReliableUDP:
             # print(packet)
             with self.lock:
                 while self.next_seq_num >= self.send_base + min(self.window_size, self.cwnd) * MSS:
+                    # print("\n")
+                    # print(min(self.window_size, self.cwnd))
+                    # print("\n")
                     print(F"self.next_seq_num {self.next_seq_num}")
                     print(f"self.send_base {self.send_base}")
                     print(f"self.window_size {self.window_size}")
                     self.lock.wait()
-                    time.sleep(5)
+                    # time.sleep(5)
 
-                if self.next_seq_num < self.send_base + min(self.window_size, self.cwnd) * MSS:
-                    print(f"Client: Sending packet: seq_num={self.next_seq_num}")
-
-
-                    if chunk == b'four' and not self.flag:
-                        self.flag = True
-                    else:
-                        self.sock.sendto(packet, self.remote_address)
+                # if self.next_seq_num < self.send_base + min(self.window_size, self.cwnd) * MSS:
+                print(f"Client: Sending packet: seq_num={self.next_seq_num}")
 
 
-                    self.unacked_packets[self.next_seq_num] = packet
-                    self.next_seq_num += len(chunk)  # Increment by the length of the chunk
-                    if self.send_base == self.next_seq_num - len(chunk):
-                        self.start_timer()
+                if chunk == b'four' and not self.flag:
+                    self.flag = True
+                else:
+                    self.sock.sendto(packet, self.remote_address)
+
+
+                self.unacked_packets[self.next_seq_num] = packet
+                self.next_seq_num += len(chunk)  # Increment by the length of the chunk
+                if self.send_base == self.next_seq_num - len(chunk):
+                    self.start_timer()
 
     def receive_ack(self):
         duplicate_ack_count = 0
@@ -98,7 +102,7 @@ class ReliableUDP:
                 with self.lock:
                     if ack_num > self.send_base:
                         duplicate_ack_count = 0  # Reset duplicate ACK count if new ACK is received
-                        print(f"Client: Received ACK: ack_num={ack_num}, window_size={new_window_size}")
+                        # print(f"Client: Received ACK: ack_num={ack_num}, window_size={self.window_size}")
                         while self.send_base < ack_num:
                             self.unacked_packets.pop(self.send_base, None)
                             self.send_base += 1
@@ -138,7 +142,11 @@ class ReliableUDP:
             self.cwnd += 1
         else:
             # Congestion avoidance phase
-            self.cwnd += 1 / self.cwnd
+            self.counter += 1
+            if self.counter == self.cwnd - 1:
+                self.cwnd += 1
+                self.counter = 0
+        print(self.cwnd)
 
     def create_packet(self, data, seq_num=None, ack_num=None, ack_flag=False, fin_flag=False, window_size=None):
         if seq_num is None:
@@ -194,37 +202,38 @@ class ReliableUDP:
                     return
 
     # def close(self):
-    #     # Client sending FIN
-    #     fin_packet = self.create_packet(b'', fin_flag=True)
-    #     self.sock.sendto(fin_packet, self.remote_address)
-    #     print("Client: Sending FIN")
-    #     self.fin_sent = True
+    def close(self):
+        # Client sending FIN
+        fin_packet = self.create_packet(b'', fin_flag=True)
+        self.sock.sendto(fin_packet, self.remote_address)
+        print("Client: Sending FIN")
+        self.fin_sent = True
 
-    #     # Wait for ACK
-    #     try:
-    #         ack_packet, _ = self.sock.recvfrom(2048)
-    #         _, ack_num, ack_flag, _ = struct.unpack(PACKET_FORMAT, ack_packet[:13])
-    #         if ack_flag:
-    #             print(f"Client: Received ACK for FIN: ack_num={ack_num}")
+        # Wait for ACK
+        try:
+            ack_packet, _ = self.sock.recvfrom(2048)
+            _, ack_num, ack_flag, _ = struct.unpack(PACKET_FORMAT, ack_packet[:13])
+            if ack_flag:
+                print(f"Client: Received ACK for FIN: ack_num={ack_num}")
 
-    #         # Wait for FIN from server
-    #         fin_packet, _ = self.sock.recvfrom(2048)
-    #         seq_num, _, fin_flag, _ = struct.unpack(PACKET_FORMAT, fin_packet[:13])
-    #         if fin_flag:
-    #             print(f"Client: Received FIN from server: seq_num={seq_num}")
+            # Wait for FIN from server
+            # fin_packet, _ = self.sock.recvfrom(2048)
+            # seq_num, _, fin_flag, _ = struct.unpack(PACKET_FORMAT, fin_packet[:13])
+            # if fin_flag:
+            #     print(f"Client: Received FIN from server: seq_num={seq_num}")
 
-    #             # Send ACK for FIN
-    #             ack_packet = self.create_packet(b'', ack_num=seq_num, ack_flag=True)
-    #             self.sock.sendto(ack_packet, self.remote_address)
-    #             print(f"Client: Sending ACK for server FIN: ack_num={seq_num}")
+            #     # Send ACK for FIN
+            #     ack_packet = self.create_packet(b'', ack_num=seq_num, ack_flag=True)
+            #     self.sock.sendto(ack_packet, self.remote_address)
+            #     print(f"Client: Sending ACK for server FIN: ack_num={seq_num}")
 
-    #     except ConnectionResetError:
-    #         print("Connection closed by peer")
-    #     except Exception as e:
-    #         print(f"Unexpected error: {e}")
-    #     finally:
-    #         self.connected = False
-    #         self.sock.close()
+        except ConnectionResetError:
+            print("Connection closed by peer")
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+        finally:
+            self.connected = False
+            self.sock.close()
 
     def receive_data(self):
         while self.connected:
@@ -233,10 +242,10 @@ class ReliableUDP:
                 # print(packet)
                 seq_num, data = self.process_packet(packet)
                 if seq_num == self.expected_seq_num:
-                    print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
+                    # print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
                     ack_packet = self.create_packet(b'', ack_num=seq_num + len(data), ack_flag=True, window_size=self.window_size)
                     self.sock.sendto(ack_packet, addr)
-                    print(f"Server: Sending ACK: ack_num={seq_num + len(data)}")
+                    # print(f"Server: Sending ACK: ack_num={seq_num + len(data)}")
                     self.expected_seq_num += len(data)  # Increment expected_seq_num by the length of the data received
                 else:
                     # Send ACK for the last correctly received packet
@@ -283,6 +292,7 @@ class ReliableUDP:
     #                     print(f"Server: Received ACK for FIN: ack_num={ack_num}")
 
     #                 self.connected = False
+    #                 self.sock.close()
     #                 break
 
     #         except ConnectionResetError:
@@ -291,7 +301,7 @@ class ReliableUDP:
     #         except Exception as e:
     #             print(f"Unexpected error: {e}")
     #             break
-    #     self.sock.close()
+
 
 def sender_main():
     local_port = 8080
@@ -306,16 +316,50 @@ def sender_main():
 
     # Send multiple packets of different sizes to test
     messages = [
-        b'oness',
-        b'fours',
-        b'crash',
-        b'someo',
-        b'great',
-        b'11111',
+        # b'oness',
+        # b'fours',
+        # b'crash',
+        # b'someo',
+        # b'great',
+        b'111',
         b'22222',
         b'33333',
         b'44444',
         b'55555',
+        b'66666',
+        b'77777',
+        b'88888',
+        b'99999',
+        b'A0000',
+        b'A1111',
+        b'A2222',
+        b'A3333',
+        b'A4444',
+        b'A5555',
+        b'A6666',
+        b'A7777',
+        b'A8888',
+        b'A9999',
+        b'B0000',
+        b'B1111',
+        b'B2222',
+        b'B3333',
+        b'B4444',
+        b'B5555',
+        b'B5555',
+        b'B5555',
+        b'B5555',
+        b'B5555',
+        b'B0000',
+        b'B1111',
+        b'B2222',
+        b'B3333',
+        b'B4444',
+        b'B5555',
+        b'B5555',
+        b'B5555',
+        b'B5555',
+        b'B5555',
     ]
 
     # messages1 = [
@@ -332,7 +376,7 @@ def sender_main():
     # for msg in messages1:
     #     reliable_sender.send(msg)
 
-    # reliable_sender.close()
+    reliable_sender.close()
     receiver_thread.join()
 
 def receiver_main():
@@ -362,3 +406,7 @@ if __name__ == '__main__':
 
     receiver_thread.join()
     sender_thread.join()
+
+
+
+## if sender has recieved a FinBit = 1 it should finish sending and close the connection by .
