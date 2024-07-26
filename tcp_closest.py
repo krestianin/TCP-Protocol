@@ -295,7 +295,7 @@ class ReliableUDP:
 
 def sender_main():
     local_port = 8080
-    remote_address = '142.58.83.132'
+    remote_address = 'localhost'
     remote_port = 8000
 
     reliable_sender = ReliableUDP(local_port, remote_address, remote_port)
@@ -336,9 +336,9 @@ def sender_main():
     receiver_thread.join()
 
 def receiver_main():
-    local_port = 8080
-    remote_address = '142.58.83.132'
-    remote_port = 8000
+    local_port = 8000
+    remote_address = 'localhost'
+    remote_port = 8080
 
     reliable_receiver = ReliableUDP(local_port, remote_address, remote_port)
     reliable_receiver.accept()
@@ -353,12 +353,12 @@ def receiver_main():
     # fin_thread.join()
 
 if __name__ == '__main__':
-    # receiver_thread = threading.Thread(target=receiver_main)
+    receiver_thread = threading.Thread(target=receiver_main)
     sender_thread = threading.Thread(target=sender_main)
     
-    # receiver_thread.start()
+    receiver_thread.start()
     time.sleep(3)
     sender_thread.start()
 
-    # receiver_thread.join()
+    receiver_thread.join()
     sender_thread.join()
