@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 import struct
-
+import sys
 # Constants
 MSS = 5  # Maximum Segment Size
 TIMEOUT = 1000  # Retransmission timeout in seconds
@@ -32,6 +32,7 @@ class ReliableUDP:
         self.connected = False
         self.flag = True
         self.counter = 0
+        self.syn_received = False
         # self.fin_sent = False  # To indicate if FIN has been sent
 
     def start_timer(self):
@@ -102,7 +103,7 @@ class ReliableUDP:
                 with self.lock:
                     if ack_num > self.send_base:
                         duplicate_ack_count = 0  # Reset duplicate ACK count if new ACK is received
-                        # print(f"Client: Received ACK: ack_num={ack_num}, window_size={self.window_size}")
+                        print(f"Client: Received ACK: ack_num={ack_num}, window_size={self.window_size}")
                         while self.send_base < ack_num:
                             self.unacked_packets.pop(self.send_base, None)
                             self.send_base += 1
@@ -127,6 +128,7 @@ class ReliableUDP:
                             duplicate_ack_count = 0  # Reset duplicate ACK count after fast retransmit
                     else:
                         print(f"Client: Received duplicate ACK: ack_num={ack_num}")
+                sys.stdout.flush()
             except ConnectionResetError:
                 print("Connection reset by peer")
                 break
@@ -140,13 +142,17 @@ class ReliableUDP:
         if self.cwnd < self.ssthresh:
             # Slow start phase
             self.cwnd += 1
+            print(f"Slow start: cwnd increased to {self.cwnd}, ssthresh={self.ssthresh}")
+
         else:
             # Congestion avoidance phase
             self.counter += 1
             if self.counter == self.cwnd - 1:
                 self.cwnd += 1
                 self.counter = 0
-        print(self.cwnd)
+            print(f"Congestion avoidance: cwnd increased to {self.cwnd}, ssthresh={self.ssthresh}")
+ 
+        # print(self.cwnd)
 
     def create_packet(self, data, seq_num=None, ack_num=None, ack_flag=False, fin_flag=False, window_size=None):
         if seq_num is None:
@@ -169,6 +175,10 @@ class ReliableUDP:
         return -1, window_size
 
     def connect(self):
+        if self.syn_received:
+            print("SYN packet already received from the other side, not sending SYN")
+            return
+
         syn_packet = self.create_packet(b'', ack_flag=True)
         self.sock.sendto(syn_packet, self.remote_address)
         print("Client: Sending SYN")
@@ -187,6 +197,8 @@ class ReliableUDP:
             syn_packet, addr = self.sock.recvfrom(2048)
             _, _, ack_flag, _ = struct.unpack(PACKET_FORMAT, syn_packet[:13])
             if ack_flag:
+                self.syn_received = True  # Set the flag to indicate a SYN packet was received
+
                 print("Server: Received SYN")
                 # Send SYN-ACK
                 syn_ack_packet = self.create_packet(b'', ack_num=0, ack_flag=True)
@@ -242,10 +254,10 @@ class ReliableUDP:
                 # print(packet)
                 seq_num, data = self.process_packet(packet)
                 if seq_num == self.expected_seq_num:
-                    # print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
+                    print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
                     ack_packet = self.create_packet(b'', ack_num=seq_num + len(data), ack_flag=True, window_size=self.window_size)
                     self.sock.sendto(ack_packet, addr)
-                    # print(f"Server: Sending ACK: ack_num={seq_num + len(data)}")
+                    print(f"Server: Sending ACK: ack_num={seq_num + len(data)}")
                     self.expected_seq_num += len(data)  # Increment expected_seq_num by the length of the data received
                 else:
                     # Send ACK for the last correctly received packet
@@ -304,8 +316,8 @@ class ReliableUDP:
 
 
 def sender_main():
-    local_port = 8080
-    remote_address = 'localhost'
+    local_port = 8000
+    remote_address = '207.23.216.87'
     remote_port = 8000
 
     reliable_sender = ReliableUDP(local_port, remote_address, remote_port)
@@ -322,44 +334,44 @@ def sender_main():
         # b'someo',
         # b'great',
         b'111',
-        b'22222',
-        b'33333',
-        b'44444',
-        b'55555',
-        b'66666',
-        b'77777',
-        b'88888',
-        b'99999',
-        b'A0000',
-        b'A1111',
-        b'A2222',
-        b'A3333',
-        b'A4444',
-        b'A5555',
-        b'A6666',
-        b'A7777',
-        b'A8888',
-        b'A9999',
-        b'B0000',
-        b'B1111',
-        b'B2222',
-        b'B3333',
-        b'B4444',
-        b'B5555',
-        b'B5555',
-        b'B5555',
-        b'B5555',
-        b'B5555',
-        b'B0000',
-        b'B1111',
-        b'B2222',
-        b'B3333',
-        b'B4444',
-        b'B5555',
-        b'B5555',
-        b'B5555',
-        b'B5555',
-        b'B5555',
+        # b'22222',
+        # b'33333',
+        # b'44444',
+        # b'55555',
+        # b'66666',
+        # b'77777',
+        # b'88888',
+        # b'99999',
+        # b'A0000',
+        # b'A1111',
+        # b'A2222',
+        # b'A3333',
+        # b'A4444',
+        # b'A5555',
+        # b'A6666',
+        # b'A7777',
+        # b'A8888',
+        # b'A9999',
+        # b'B0000',
+        # b'B1111',
+        # b'B2222',
+        # b'B3333',
+        # b'B4444',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
+        # b'B0000',
+        # b'B1111',
+        # b'B2222',
+        # b'B3333',
+        # b'B4444',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
+        # b'B5555',
     ]
 
     # messages1 = [
@@ -376,13 +388,13 @@ def sender_main():
     # for msg in messages1:
     #     reliable_sender.send(msg)
 
-    reliable_sender.close()
+    # reliable_sender.close()
     receiver_thread.join()
 
 def receiver_main():
-    local_port = 8000
-    remote_address = 'localhost'
-    remote_port = 8080
+    local_port = 8001
+    remote_address = '207.23.216.87'
+    remote_port = 8001
 
     reliable_receiver = ReliableUDP(local_port, remote_address, remote_port)
     reliable_receiver.accept()
@@ -410,3 +422,7 @@ if __name__ == '__main__':
 
 
 ## if sender has recieved a FinBit = 1 it should finish sending and close the connection by .
+## simulate the loss for congestion avoidance
+## Fast retransmit due to 3 duplicate ACKs
+## Client: Sending SYN
+## Client: Sending packet: seq_num=0
