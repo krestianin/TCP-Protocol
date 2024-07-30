@@ -7,7 +7,7 @@ import random
 from scapy.all import IP, UDP, Raw
 
 MSS = 5
-TIMEOUT = 1000
+TIMEOUT = 5
 WINDOW_SIZE = 27
 INITIAL_CWND = 1
 SSTHRESH = 4
@@ -100,14 +100,15 @@ class ReliableUDP:
                 # else:
                 #     self.sock.sendto(bytes(packet), self.remote_address)
 
-                if chunk == b'A3333' and not self.flag:
-                    packet = IP(dst=self.remote_address[0]) / UDP(sport=8001, dport=self.remote_address[1], chksum=0xFFFF) / Raw(load=chunk)
-                    self.sock.sendto((packet), self.remote_address)
-                    self.flag = True
-                else:
-                    self.sock.sendto((packet), self.remote_address)
+                # if chunk == b'A3333' and not self.flag:
+                #     packet = IP(dst=self.remote_address[0]) / UDP(sport=8001, dport=self.remote_address[1], chksum=0xFFFF) / Raw(load=chunk)
+                #     self.sock.sendto((packet), self.remote_address)
+                #     self.flag = True
+                # else:
+                #     self.sock.sendto((packet), self.remote_address)
                 
-
+                self.sock.sendto((packet), self.remote_address)
+                
                 self.unacked_packets[self.next_seq_num] = packet
                 self.next_seq_num += len(chunk)
                 if self.send_base == self.next_seq_num - len(chunk):
@@ -320,38 +321,42 @@ class ReliableUDP:
 
         # Wait for ACK
         try:
-            while self.connected:
-                self.sock.settimeout(5)
-                try:
-                    ack_packet, _ = self.sock.recvfrom(2048)
-                    _, ack_num, flags, _ = struct.unpack(PACKET_FORMAT, ack_packet[:13])
-                    ack_flag = flags & 0x01
-                    fin_flag = (flags >> 1) & 1
+            # while self.connected:
+                # self.sock.settimeout(5)
+            try:
+                ack_packet, _ = self.sock.recvfrom(2048)
+                _, ack_num, flags, _ = struct.unpack(PACKET_FORMAT, ack_packet[:13])
+                ack_flag = flags & 0x01
+                fin_flag = (flags >> 1) & 1
 
-                    if ack_flag and ack_num == self.next_seq_num + 1:
-                        print(f"Client: Received ACK for FIN: ack_num={ack_num}")
-                        self.stop_fin_timer()
-                        break
+                if ack_flag and ack_num == self.next_seq_num + 1:
+                    print(f"Client: Received ACK for FINdfsdfdsfsd: ack_num={ack_num}")
+                    self.stop_fin_timer()
+                    return
 
-                    # if fin_flag:
-                    #     print(f"Client: Received FIN from server: seq_num={ack_num}")
+                # if fin_flag:
+                #     print(f"Client: Received FIN from server: seq_num={ack_num}")
 
-                    #     # Send ACK for FIN
-                    #     ack_packet = self.create_packet(b'', ack_num=ack_num + 1, ack_flag=True)
-                    #     self.sock.sendto(ack_packet, self.remote_address)
-                    #     print(f"Client: Sending ACK for server FIN: ack_num={ack_num + 1}")
-                    #     self.stop_fin_timer()
-                    #     break
-                except socket.timeout:
-                    if(not self.fin_sent):
-                        print("Client: FIN-ACK not received, retransmitting FIN")
-                        self.sock.sendto(fin_packet, self.remote_address)
+                #     # Send ACK for FIN
+                #     ack_packet = self.create_packet(b'', ack_num=ack_num + 1, ack_flag=True)
+                #     self.sock.sendto(ack_packet, self.remote_address)
+                #     print(f"Client: Sending ACK for server FIN: ack_num={ack_num + 1}")
+                #     self.stop_fin_timer()
+                #     break
+            except socket.timeout:
+                if(not self.fin_sent):
+                    print("Client: FIN-ACK not received, retransmitting FIN")
+                    self.sock.sendto(fin_packet, self.remote_address)
+                else:
+                    print("Connection closed")
 
 
         except ConnectionResetError:
             print("Connection closed by peer")
-        except Exception as e:
+        except OSError as e:
             print(f"Connection closed")
+        except Exception as e:
+            print(f"Unexpected error: {e}")
         finally:
             self.connected = False
             self.sock.close()
@@ -436,30 +441,30 @@ def sender_main():
 
     messages = [
         b'twoss',
-        b'fours',
-        b'crash',
-        b'someo',
-        b'great',
-        b'111',
-        b'22222',
-        b'33333',
-        b'44444',
-        b'55555',
-        b'66666',
-        b'77777',
-        b'88888',
-        b'99999',
-        b'A0000',
-        b'A1111',
-        b'A2222',
-        b'A3333',
-        b'A4444',
-        b'A5555',
-        b'A6666',
-        b'A7777',
-        b'A8888',
-        b'A9999',
-        b'B0000',
+        # b'fours',
+        # b'crash',
+        # b'someo',
+        # b'great',
+        # b'111',
+        # b'22222',
+        # b'33333',
+        # b'44444',
+        # b'55555',
+        # b'66666',
+        # b'77777',
+        # b'88888',
+        # b'99999',
+        # b'A0000',
+        # b'A1111',
+        # b'A2222',
+        # b'A3333',
+        # b'A4444',
+        # b'A5555',
+        # b'A6666',
+        # b'A7777',
+        # b'A8888',
+        # b'A9999',
+        # b'B0000',
         # b'B1111',
         # b'B2222',
         # b'B3333',
