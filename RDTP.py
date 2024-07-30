@@ -322,7 +322,7 @@ class ReliableUDP:
         # Wait for ACK
         try:
             # while self.connected:
-                # self.sock.settimeout(5)
+            self.sock.settimeout(5)
             try:
                 ack_packet, _ = self.sock.recvfrom(2048)
                 _, ack_num, flags, _ = struct.unpack(PACKET_FORMAT, ack_packet[:13])
