@@ -12,7 +12,7 @@ SSTHRESH = 4  # Slow start threshold
 
 
 # Packet format: SEQ_NUM (4 bytes) | ACK_NUM (4 bytes) | FLAGS (1 byte) | WINDOW (4 bytes) | DATA
-PACKET_FORMAT = '!II?I'
+PACKET_FORMAT = '!IIBI'
 
 class ReliableUDP:
     def __init__(self, local_port, remote_address, remote_port):
@@ -99,7 +99,16 @@ class ReliableUDP:
         while self.connected:
             try:
                 packet, _ = self.sock.recvfrom(2048)
-                ack_num, new_window_size = self.process_ack(packet)
+                seq_num, ack_num, flags, new_window_size = struct.unpack(PACKET_FORMAT, packet[:13])
+                ack_flag = flags & 0x01
+                fin_flag = (flags >> 1) & 1
+                print(fin_flag)
+                if fin_flag and ack_flag:
+                    print(f"Client: Received ACK for FIN: ack_num={ack_num}")
+                    self.connected = False
+                    self.sock.close()
+                    break
+
                 with self.lock:
                     if ack_num > self.send_base:
                         duplicate_ack_count = 0  # Reset duplicate ACK count if new ACK is received
@@ -229,15 +238,15 @@ class ReliableUDP:
                 print(f"Client: Received ACK for FIN: ack_num={ack_num}")
 
             # Wait for FIN from server
-            # fin_packet, _ = self.sock.recvfrom(2048)
-            # seq_num, _, fin_flag, _ = struct.unpack(PACKET_FORMAT, fin_packet[:13])
-            # if fin_flag:
-            #     print(f"Client: Received FIN from server: seq_num={seq_num}")
+            fin_packet, _ = self.sock.recvfrom(2048)
+            seq_num, _, fin_flag, _ = struct.unpack(PACKET_FORMAT, fin_packet[:13])
+            if fin_flag:
+                print(f"Client: Received FIN from server: seq_num={seq_num}")
 
-            #     # Send ACK for FIN
-            #     ack_packet = self.create_packet(b'', ack_num=seq_num, ack_flag=True)
-            #     self.sock.sendto(ack_packet, self.remote_address)
-            #     print(f"Client: Sending ACK for server FIN: ack_num={seq_num}")
+                # Send ACK for FIN
+                ack_packet = self.create_packet(b'', ack_num=seq_num, ack_flag=True)
+                self.sock.sendto(ack_packet, self.remote_address)
+                print(f"Client: Sending ACK for server FIN: ack_num={seq_num}")
 
         except ConnectionResetError:
             print("Connection closed by peer")
@@ -251,8 +260,20 @@ class ReliableUDP:
         while self.connected:
             try:
                 packet, addr = self.sock.recvfrom(2048)
-                # print(packet)
-                seq_num, data = self.process_packet(packet)
+                seq_num, ack_num, flags, window_size = struct.unpack(PACKET_FORMAT, packet[:13])
+                ack_flag = flags & 0x01
+                fin_flag = (flags & 0x02) >> 1
+                # print(f'{flags:08b}')
+                data = packet[13:]
+
+                if fin_flag:
+                    print(f"Server: Received FIN: seq_num={seq_num}")
+                    # Send ACK for FIN
+                    ack_packet = self.create_packet(b'', ack_num=seq_num + 1, ack_flag=True, fin_flag=True)
+                    self.sock.sendto(ack_packet, addr)
+                    print(f"Server: Sending ACK for FIN: ack_num={seq_num + 1}")
+                    self.connected = False
+                    break
                 if seq_num == self.expected_seq_num:
                     print(f"Server: Data received: seq_num={seq_num}, data={data}...")  # Print data
                     ack_packet = self.create_packet(b'', ack_num=seq_num + len(data), ack_flag=True, window_size=self.window_size)
@@ -388,7 +409,8 @@ def sender_main():
     # for msg in messages1:
     #     reliable_sender.send(msg)
 
-    # reliable_sender.close()
+    reliable_sender.close()
+    reliable_sender.send(msg)
     receiver_thread.join()
 
 def receiver_main():
@@ -420,9 +442,7 @@ if __name__ == '__main__':
     sender_thread.join()
 
 
-
-## if sender has recieved a FinBit = 1 it should finish sending and close the connection by .
 ## simulate the loss for congestion avoidance
 ## Fast retransmit due to 3 duplicate ACKs
-## Client: Sending SYN
-## Client: Sending packet: seq_num=0
+## resend syn if timeout
+## resend like syn after fin sent
