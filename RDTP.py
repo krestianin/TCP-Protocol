@@ -1,3 +1,4 @@
+import argparse
 import socket
 import threading
 import time
@@ -8,9 +9,9 @@ from scapy.layers.inet import IP, UDP
 from scapy.all import Raw
 
 MSS = 5
-TIMEOUT = 5
+TIMEOUT = 6
 WINDOW_SIZE = 27
-INITIAL_CWND = 1
+INITIAL_CWND = 2
 SSTHRESH = 4
 
 # seq_num (4 bytes) | ack_num (4 bytes) | flags (1 byte) | window (4 bytes) | data
@@ -44,7 +45,7 @@ class ReliableUDP:
         # Testing flag to imitate FIN loss
         self.flag = True
         # Testing flag to imitate packet loss
-        self.send_flag = True
+        self.send_flag = False
         # To indicate if FIN has been sent
         self.fin_sent = False 
         self.fin_timer = None
@@ -97,7 +98,7 @@ class ReliableUDP:
 
                 print(f"Sender: Sending packet: seq_num={self.next_seq_num}")
 
-                if chunk == b'A3333' and not self.send_flag:
+                if chunk == b'55555' and not self.send_flag:
                     corrupted_packet = (IP(dst=self.remote_address[0]) / UDP(sport=8001, dport=self.remote_address[1], chksum=0xFFFF) / Raw(load=chunk))
                     self.sock.sendto(bytes(corrupted_packet), self.remote_address)
                     self.send_flag = True
@@ -110,7 +111,7 @@ class ReliableUDP:
                 self.next_seq_num += len(chunk)
                 if self.send_base == self.next_seq_num - len(chunk):
                     self.start_timer()
-
+        print("\n")
 
 
     def receive_ack(self):
@@ -164,8 +165,11 @@ class ReliableUDP:
                             print(f"Sender: Fast retransmit due to 3 duplicate ACKs for seq_num={self.send_base}")
                             self.ssthresh = max(self.cwnd // 2, 1)
                             self.cwnd = INITIAL_CWND
-                            if self.send_base in self.unacked_packets:
-                                self.sock.sendto(self.unacked_packets[self.send_base], self.remote_address)
+                            for seq in sorted(self.unacked_packets.keys()):
+                                packet = self.unacked_packets.get(seq)
+                                if packet:
+                                    print(f"Sender: Resending packet: seq_num={seq}")
+                                    self.sock.sendto(packet, self.remote_address)
                             duplicate_ack_count = 0  # Reset duplicate ACK count after fast retransmit
                     else:
                         print(f"Sender: Received duplicate ACK: ack_num={ack_num}")
@@ -186,16 +190,16 @@ class ReliableUDP:
     def update_cwnd(self):
         if self.cwnd < self.ssthresh:
             # Slow start phase
+            print(f"Slow start: cwnd={self.cwnd}, ssthresh={self.ssthresh}")
             self.cwnd += 1
-            print(f"Slow start: cwnd increased to {self.cwnd}, ssthresh={self.ssthresh}")
 
         else:
             # Congestion avoidance phase
+            print(f"Congestion avoidance: cwnd={self.cwnd}, ssthresh={self.ssthresh}")
             self.counter += 1
             if self.counter == self.cwnd - 1:
                 self.cwnd += 1
                 self.counter = 0
-            print(f"Congestion avoidance: cwnd increased to {self.cwnd}, ssthresh={self.ssthresh}")
         # print(self.cwnd)
 
 
@@ -429,6 +433,7 @@ class ReliableUDP:
 
 
 
+# def sender_main(remote_address, remote_port):
 def sender_main():
     local_port = 8000
     remote_address = 'localhost'
@@ -443,22 +448,22 @@ def sender_main():
 
     messages = [
         b'twoss',
-        # b'fours',
-        # b'crash',
-        # b'someo',
-        # b'great',
-        # b'111',
-        # b'22222',
-        # b'33333',
-        # b'44444',
-        # b'55555',
-        # b'66666',
-        # b'77777',
-        # b'88888',
-        # b'99999',
-        # b'A0000',
-        # b'A1111',
-        # b'A2222',
+        b'fours',
+        b'crash',
+        b'someo',
+        b'great',
+        b'111',
+        b'22222',
+        b'33333',
+        b'44444',
+        b'55555',
+        b'66666',
+        b'77777',
+        b'88888',
+        b'99999',
+        b'A0000',
+        b'A1111',
+        b'A2222',
         b'A3333',
         # b'A4444',
         # b'A5555',
@@ -506,8 +511,6 @@ def receiver_main():
     reliable_receiver.accept()
     reliable_receiver.receive_data()
 
-
-
 if __name__ == '__main__':
     receiver_thread = threading.Thread(target=receiver_main)
     sender_thread = threading.Thread(target=sender_main)
@@ -520,4 +523,21 @@ if __name__ == '__main__':
     sender_thread.join()
 
 
-## simulate the loss for congestion avoidance
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser(description='Reliable UDP Protocol')
+#     parser.add_argument('--role', choices=['sender', 'receiver'], required=True, help='Role: sender or receiver')
+#     parser.add_argument('--host', type=str, help='Remote host IP address')
+#     parser.add_argument('--port', type=int, help='Remote port number')
+
+#     args = parser.parse_args()
+
+#     if args.role == 'receiver':
+#         receiver_main()
+#     elif args.role == 'sender':
+#         if args.host is None or args.port is None:
+#             print("Sender requires --host and --port arguments.")
+#             sys.exit(1)
+#         sender_main(args.host, args.port)
+
+
+# ## simulate the loss for congestion avoidance
